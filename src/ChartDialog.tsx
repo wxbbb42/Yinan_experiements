@@ -27,7 +27,7 @@ const fieldIcon = (id: string) => {
 };
 
 type ChartType = 'Bar' | 'Line' | 'Box' | 'Scatter';
-type ZoneId = 'x_axis' | 'left_y_axis' | 'right_y_axis' | 'columns_by';
+type ZoneId = 'x_axis' | 'left_y_axis' | 'right_y_axis' | 'columns_by' | 'rows_by' | 'overlay_by' | 'color_acc_to' | 'shape_acc_to';
 
 interface ZoneDef {
   id: ZoneId;
@@ -39,6 +39,10 @@ const DROP_ZONES: ZoneDef[] = [
   { id: 'left_y_axis', label: 'Left Y Axis' },
   { id: 'right_y_axis', label: 'Right Y Axis' },
   { id: 'columns_by', label: 'Columns by' },
+  { id: 'rows_by', label: 'Rows by' },
+  { id: 'overlay_by', label: 'Overlay by' },
+  { id: 'color_acc_to', label: 'Color acc to' },
+  { id: 'shape_acc_to', label: 'Shape acc to' },
 ];
 
 // ─── Mock data (semiconductor manufacturing) ─────────────────────────
@@ -76,168 +80,183 @@ function buildChartOption(
   xFields: string[],
   leftYFields: string[],
   rightYFields: string[],
+  colorAccTo: string[] = [],
 ): Record<string, unknown> | null {
   if (xFields.length === 0 && leftYFields.length === 0 && rightYFields.length === 0) return null;
 
   const allYFields = [...leftYFields, ...rightYFields];
   const hasX = xFields.length > 0;
   const hasY = allYFields.length > 0;
+  const colorField = colorAccTo.length > 0 ? colorAccTo[0] : null;
 
-  // Build composite X key from all X fields (e.g. "W01 | A1")
-  const xCompositeKey = (row: Record<string, string | number>) =>
-    xFields.map(f => String(row[f])).join(' | ');
-  const xLabel = xFields.map(fieldLabel).join(' | ');
-  const xValues = hasX ? MOCK_DATA.map(r => xCompositeKey(r)) : [];
-  const uniqueX = [...new Set(xValues)];
+  const colorCategories = colorField ? [...new Set(MOCK_DATA.map(r => String(r[colorField])))] : [];
+  const COLORS = ['#5470c6','#91cc75','#fac858','#ee6666','#73c0de','#3ba272','#fc8452','#9a60b4','#ea7ccc'];
 
-  const tooltip: Record<string, unknown> = { trigger: 'axis', confine: true };
+  const tooltip: Record<string, unknown> = { trigger: chartType === 'Scatter' ? 'item' : 'axis', confine: true };
   const legend: Record<string, unknown> = { show: false };
-  const grid: Record<string, unknown> = { left: 70, right: rightYFields.length > 0 ? 70 : 35, top: 20, bottom: xFields.length > 1 ? 70 : 55, containLabel: false };
-
-  // ─ X-only: show axis with ticks, no series ─
-  if (hasX && !hasY) {
-    return {
-      tooltip, grid,
-      xAxis: {
-        type: 'category',
-        name: xLabel,
-        data: uniqueX,
-        nameLocation: 'middle',
-        nameGap: xFields.length > 1 ? 50 : 32,
-        axisLabel: { rotate: uniqueX.length > 15 ? 45 : 0, fontSize: 11 },
-        axisLine: { show: true },
-        axisTick: { show: true },
-      },
-      yAxis: { type: 'value', show: true, axisLine: { show: true }, axisTick: { show: true }, splitLine: { show: true, lineStyle: { type: 'dashed', color: '#eee' } } },
-      series: [],
-    };
-  }
 
   // ─ Y-only: show axis with ticks, no series ─
   if (!hasX && hasY) {
-    // Compute min/max from data for proper tick range
-    const yAxes = [];
+    const grid = { left: 70, right: 35, top: 20, bottom: 55, containLabel: false };
+    const yAxes: Record<string, unknown>[] = [];
     if (leftYFields.length > 0) {
       const allVals = leftYFields.flatMap(yf => MOCK_DATA.map(r => Number(r[yf])));
-      yAxes.push({
-        type: 'value',
-        name: leftYFields.map(fieldLabel).join(', '),
-        nameLocation: 'middle' as const,
-        nameGap: 50,
-        min: Math.floor(Math.min(...allVals) * 0.95),
-        max: Math.ceil(Math.max(...allVals) * 1.05),
-        axisLine: { show: true },
-        axisTick: { show: true },
-      });
+      yAxes.push({ type: 'value', name: leftYFields.map(fieldLabel).join(', '), nameLocation: 'middle', nameGap: 50,
+        min: Math.floor(Math.min(...allVals) * 0.95), max: Math.ceil(Math.max(...allVals) * 1.05),
+        axisLine: { show: true }, axisTick: { show: true } });
     }
     if (rightYFields.length > 0) {
       const allVals = rightYFields.flatMap(yf => MOCK_DATA.map(r => Number(r[yf])));
-      yAxes.push({
-        type: 'value',
-        name: rightYFields.map(fieldLabel).join(', '),
-        nameLocation: 'middle' as const,
-        nameGap: 50,
-        min: Math.floor(Math.min(...allVals) * 0.95),
-        max: Math.ceil(Math.max(...allVals) * 1.05),
-        axisLine: { show: true },
-        axisTick: { show: true },
+      yAxes.push({ type: 'value', name: rightYFields.map(fieldLabel).join(', '), nameLocation: 'middle', nameGap: 50,
+        min: Math.floor(Math.min(...allVals) * 0.95), max: Math.ceil(Math.max(...allVals) * 1.05),
+        axisLine: { show: true }, axisTick: { show: true } });
+    }
+    return { tooltip, grid, xAxis: { type: 'category', show: true, data: [], axisLine: { show: true }, axisTick: { show: false } },
+      yAxis: yAxes.length > 0 ? yAxes : { type: 'value', show: true }, series: [] };
+  }
+
+  // ─ X-only: show axis with ticks, no series ─
+  if (hasX && !hasY) {
+    // Multi X: side-by-side panels
+    const n = xFields.length;
+    const grids: Record<string, unknown>[] = [];
+    const xAxes: Record<string, unknown>[] = [];
+    const yAxes: Record<string, unknown>[] = [];
+    for (let i = 0; i < n; i++) {
+      const w = (100 - 8) / n; // percentage width per panel
+      grids.push({ left: `${4 + i * w}%`, width: `${w - 2}%`, top: 20, bottom: 55, containLabel: false });
+      const vals = [...new Set(MOCK_DATA.map(r => String(r[xFields[i]])))];
+      xAxes.push({ type: 'category', gridIndex: i, name: fieldLabel(xFields[i]), data: vals, nameLocation: 'middle', nameGap: 32,
+        axisLabel: { rotate: vals.length > 15 ? 45 : 0, fontSize: 11 }, axisLine: { show: true }, axisTick: { show: true } });
+      yAxes.push({ type: 'value', gridIndex: i, show: i === 0, axisLine: { show: true }, axisTick: { show: true },
+        splitLine: { show: true, lineStyle: { type: 'dashed', color: '#eee' } } });
+    }
+    return { tooltip, grid: grids, xAxis: xAxes, yAxis: yAxes, series: [] };
+  }
+
+  // ─ Both X and Y assigned: multi-panel layout ─
+  const n = xFields.length;
+  const hasRightY = rightYFields.length > 0;
+
+  // Compute shared Y range
+  const leftVals = leftYFields.flatMap(yf => MOCK_DATA.map(r => Number(r[yf])));
+  const rightVals = rightYFields.flatMap(yf => MOCK_DATA.map(r => Number(r[yf])));
+  const leftMin = leftVals.length > 0 ? Math.floor(Math.min(...leftVals) * 0.95) : 0;
+  const leftMax = leftVals.length > 0 ? Math.ceil(Math.max(...leftVals) * 1.05) : 100;
+  const rightMin = rightVals.length > 0 ? Math.floor(Math.min(...rightVals) * 0.95) : 0;
+  const rightMax = rightVals.length > 0 ? Math.ceil(Math.max(...rightVals) * 1.05) : 100;
+
+  // Build grids, axes, series for each X panel
+  const grids: Record<string, unknown>[] = [];
+  const xAxes: Record<string, unknown>[] = [];
+  const yAxesList: Record<string, unknown>[] = [];
+  const allSeries: Record<string, unknown>[] = [];
+
+  for (let i = 0; i < n; i++) {
+    const xf = xFields[i];
+    const xVals = [...new Set(MOCK_DATA.map(r => String(r[xf])))];
+    const leftPad = i === 0 ? 70 : 15;
+    const rightPad = (i === n - 1 && hasRightY) ? 70 : 15;
+    const wPct = (100 - 4) / n;
+    grids.push({ left: `${2 + i * wPct}%`, width: `${wPct - 2}%`, top: 20, bottom: 55, containLabel: false,
+      ...(i === 0 ? { left: leftPad } : {}),
+      ...(i === n - 1 ? { right: rightPad } : {}),
+    });
+
+    const yIdxBase = i * (hasRightY ? 2 : 1);
+
+    xAxes.push({
+      type: 'category', gridIndex: i, name: fieldLabel(xf), data: xVals,
+      nameLocation: 'middle', nameGap: 32,
+      axisLabel: { rotate: xVals.length > 15 ? 45 : 0, fontSize: 11 },
+      axisLine: { show: true }, axisTick: { show: true },
+    });
+
+    // Left Y axis
+    yAxesList.push({
+      type: 'value', gridIndex: i,
+      name: i === 0 ? leftYFields.map(fieldLabel).join(', ') : '',
+      nameLocation: 'middle', nameGap: 50,
+      min: leftMin, max: leftMax,
+      axisLabel: { show: i === 0 },
+      axisLine: { show: true }, axisTick: { show: true },
+      splitLine: { show: true, lineStyle: { type: 'dashed', color: '#eee' } },
+    });
+
+    // Right Y axis (if any)
+    if (hasRightY) {
+      yAxesList.push({
+        type: 'value', gridIndex: i,
+        name: i === n - 1 ? rightYFields.map(fieldLabel).join(', ') : '',
+        nameLocation: 'middle', nameGap: 50,
+        min: rightMin, max: rightMax,
+        axisLabel: { show: i === n - 1 },
+        axisLine: { show: i === n - 1 }, axisTick: { show: i === n - 1 },
+        splitLine: { show: false },
       });
     }
-    return {
-      tooltip, grid,
-      xAxis: { type: 'category', show: true, data: [], axisLine: { show: true }, axisTick: { show: false } },
-      yAxis: yAxes.length > 0 ? yAxes : { type: 'value', show: true },
-      series: [],
-    };
-  }
 
-  // ─ Both X and Y assigned ─
-
-  // ─ Scatter ─
-  if (chartType === 'Scatter') {
-    tooltip.trigger = 'item';
-    const series = allYFields.map((yf) => ({
-      name: fieldLabel(yf),
-      type: 'scatter' as const,
-      yAxisIndex: leftYFields.includes(yf) ? 0 : 1,
-      data: MOCK_DATA.map(r => [xCompositeKey(r), r[yf]]),
-      symbolSize: 8,
-      itemStyle: { opacity: 0.75 },
-    }));
-    return {
-      tooltip, legend, grid,
-      xAxis: { type: 'category', name: xLabel, data: uniqueX, nameLocation: 'middle', nameGap: xFields.length > 1 ? 50 : 32, axisLabel: { rotate: uniqueX.length > 15 ? 45 : 0, fontSize: 11 } },
-      yAxis: [
-        { type: 'value', name: leftYFields.map(fieldLabel).join(', '), nameLocation: 'middle', nameGap: 50 },
-        ...(rightYFields.length > 0
-          ? [{ type: 'value', name: rightYFields.map(fieldLabel).join(', '), nameLocation: 'middle', nameGap: 50 }]
-          : []),
-      ],
-      series,
-    };
-  }
-
-  // ─ Box ─
-  if (chartType === 'Box') {
-    const grouped: Record<string, number[][]> = {};
-    for (const yf of allYFields) {
-      grouped[yf] = [];
-      for (const cat of uniqueX) {
-        const vals = MOCK_DATA.filter(r => xCompositeKey(r) === cat).map(r => Number(r[yf])).sort((a, b) => a - b);
-        if (vals.length === 0) { grouped[yf].push([0, 0, 0, 0, 0]); continue; }
-        const q1 = vals[Math.floor(vals.length * 0.25)];
-        const q3 = vals[Math.floor(vals.length * 0.75)];
-        const med = vals[Math.floor(vals.length * 0.5)];
-        grouped[yf].push([vals[0], q1, med, q3, vals[vals.length - 1]]);
+    // Build series for this panel
+    const buildPanelSeries = (yf: string, isRight: boolean) => {
+      const yIdx = isRight ? yIdxBase + 1 : yIdxBase;
+      if (colorField && colorCategories.length > 0) {
+        return colorCategories.map((cat, ci) => {
+          const catData = MOCK_DATA.filter(r => String(r[colorField]) === cat);
+          if (chartType === 'Scatter') {
+            return {
+              name: allYFields.length > 1 ? `${fieldLabel(yf)} (${cat})` : String(cat),
+              type: 'scatter', xAxisIndex: i, yAxisIndex: yIdx,
+              data: catData.map(r => [String(r[xf]), r[yf]]),
+              symbolSize: 8, itemStyle: { color: COLORS[ci % COLORS.length], opacity: 0.75 },
+            };
+          }
+          // Bar / Line
+          const grouped: Record<string, number[]> = {};
+          for (const c of xVals) grouped[c] = [];
+          for (const r of catData) grouped[String(r[xf])].push(Number(r[yf]));
+          return {
+            name: allYFields.length > 1 ? `${fieldLabel(yf)} (${cat})` : String(cat),
+            type: chartType.toLowerCase(), xAxisIndex: i, yAxisIndex: yIdx,
+            data: xVals.map(c => { const arr = grouped[c]; return arr?.length ? +(arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(2) : 0; }),
+            itemStyle: { color: COLORS[ci % COLORS.length] },
+            ...(chartType === 'Bar' ? { barMaxWidth: 40 } : {}),
+          };
+        });
       }
-    }
-    const series = allYFields.map((yf) => ({
-      name: fieldLabel(yf),
-      type: 'boxplot' as const,
-      yAxisIndex: leftYFields.includes(yf) ? 0 : 1,
-      data: grouped[yf],
-    }));
-    return {
-      tooltip: { trigger: 'item', confine: true }, legend, grid,
-      xAxis: { type: 'category', data: uniqueX, name: xLabel, nameLocation: 'middle', nameGap: xFields.length > 1 ? 50 : 32, axisLabel: { rotate: uniqueX.length > 15 ? 45 : 0, fontSize: 11 } },
-      yAxis: [
-        { type: 'value', name: leftYFields.map(fieldLabel).join(', '), nameLocation: 'middle', nameGap: 50 },
-        ...(rightYFields.length > 0
-          ? [{ type: 'value', name: rightYFields.map(fieldLabel).join(', '), nameLocation: 'middle', nameGap: 50 }]
-          : []),
-      ],
-      series,
+      // No color grouping
+      if (chartType === 'Scatter') {
+        return [{
+          name: fieldLabel(yf), type: 'scatter', xAxisIndex: i, yAxisIndex: yIdx,
+          data: MOCK_DATA.map(r => [String(r[xf]), r[yf]]),
+          symbolSize: 8, itemStyle: { opacity: 0.75 },
+        }];
+      }
+      if (chartType === 'Box') {
+        const boxData: number[][] = [];
+        for (const cat of xVals) {
+          const vals = MOCK_DATA.filter(r => String(r[xf]) === cat).map(r => Number(r[yf])).sort((a, b) => a - b);
+          if (vals.length === 0) { boxData.push([0, 0, 0, 0, 0]); continue; }
+          const q1 = vals[Math.floor(vals.length * 0.25)], q3 = vals[Math.floor(vals.length * 0.75)], med = vals[Math.floor(vals.length * 0.5)];
+          boxData.push([vals[0], q1, med, q3, vals[vals.length - 1]]);
+        }
+        return [{ name: fieldLabel(yf), type: 'boxplot', xAxisIndex: i, yAxisIndex: yIdx, data: boxData }];
+      }
+      // Bar / Line
+      const agg: Record<string, number[]> = {};
+      for (const c of xVals) agg[c] = [];
+      for (const r of MOCK_DATA) agg[String(r[xf])].push(Number(r[yf]));
+      return [{
+        name: fieldLabel(yf), type: chartType.toLowerCase(), xAxisIndex: i, yAxisIndex: yIdx,
+        data: xVals.map(c => { const arr = agg[c]; return arr.length ? +(arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(2) : 0; }),
+        ...(chartType === 'Bar' ? { barMaxWidth: 40 } : {}),
+      }];
     };
+
+    for (const yf of leftYFields) allSeries.push(...buildPanelSeries(yf, false));
+    for (const yf of rightYFields) allSeries.push(...buildPanelSeries(yf, true));
   }
 
-  // ─ Bar / Line ─
-  const aggregated: Record<string, Record<string, number[]>> = {};
-  for (const yf of allYFields) {
-    aggregated[yf] = {};
-    for (const cat of uniqueX) aggregated[yf][cat] = [];
-    for (const r of MOCK_DATA) aggregated[yf][xCompositeKey(r)].push(Number(r[yf]));
-  }
-  const series = allYFields.map((yf) => ({
-    name: fieldLabel(yf),
-    type: chartType.toLowerCase() as 'bar' | 'line',
-    yAxisIndex: leftYFields.includes(yf) ? 0 : 1,
-    data: uniqueX.map(cat => {
-      const arr = aggregated[yf][cat];
-      return arr.length ? +(arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(2) : 0;
-    }),
-    ...(chartType === 'Bar' ? { barMaxWidth: 40 } : {}),
-  }));
-  return {
-    tooltip, legend, grid,
-    xAxis: { type: 'category', data: uniqueX, name: xLabel, nameLocation: 'middle', nameGap: xFields.length > 1 ? 50 : 32, axisLabel: { rotate: uniqueX.length > 15 ? 45 : 0, fontSize: 11 } },
-    yAxis: [
-      { type: 'value', name: leftYFields.map(fieldLabel).join(', '), nameLocation: 'middle', nameGap: 50 },
-      ...(rightYFields.length > 0
-        ? [{ type: 'value', name: rightYFields.map(fieldLabel).join(', '), nameLocation: 'middle', nameGap: 50 }]
-        : []),
-    ],
-    series,
-  };
+  return { tooltip, legend, grid: grids, xAxis: xAxes, yAxis: yAxesList, series: allSeries };
 }
 
 // ─── Styles ──────────────────────────────────────────────────────────
@@ -268,6 +287,7 @@ export default function ChartDialog({ open }: { open: boolean; onOpenChange: (v:
 
   const [zoneFields, setZoneFields] = useState<Record<ZoneId, string[]>>({
     x_axis: [], left_y_axis: [], right_y_axis: [], columns_by: [],
+    rows_by: [], overlay_by: [], color_acc_to: [], shape_acc_to: [],
   });
   const [pendingZoneFields, setPendingZoneFields] = useState<Record<ZoneId, string[]> | null>(null);
 
@@ -276,7 +296,7 @@ export default function ChartDialog({ open }: { open: boolean; onOpenChange: (v:
   const usedFieldIds = useMemo(() => new Set(Object.values(displayZoneFields).flat()), [displayZoneFields]);
 
   const chartOption = useMemo(
-    () => buildChartOption(chartType, zoneFields.x_axis, zoneFields.left_y_axis, zoneFields.right_y_axis),
+    () => buildChartOption(chartType, zoneFields.x_axis, zoneFields.left_y_axis, zoneFields.right_y_axis, zoneFields.color_acc_to),
     [chartType, zoneFields],
   );
 
@@ -442,7 +462,7 @@ export default function ChartDialog({ open }: { open: boolean; onOpenChange: (v:
   }, [pendingZoneFields, editMode]);
 
   const handleReset = useCallback(() => {
-    setZoneFields({ x_axis: [], left_y_axis: [], right_y_axis: [], columns_by: [] });
+    setZoneFields({ x_axis: [], left_y_axis: [], right_y_axis: [], columns_by: [], rows_by: [], overlay_by: [], color_acc_to: [], shape_acc_to: [] });
     setPendingZoneFields(null);
     setShowHotZones(false);
     setEditMode(false);
@@ -563,12 +583,11 @@ export default function ChartDialog({ open }: { open: boolean; onOpenChange: (v:
     const isOver = dragOverZone === zone.id;
     const visible = showHotZones || editMode;
     const tags = displayZoneFields[zone.id];
-    const vertical = zone.id === 'left_y_axis' || zone.id === 'right_y_axis';
-    // X axis uses column layout (title on top, tags row below)
-    const isXAxis = zone.id === 'x_axis';
+    const vertical = zone.id === 'left_y_axis' || zone.id === 'right_y_axis' || zone.id === 'rows_by';
+    // Column layout: title on top, tags row below (for horizontal zones)
+    const isColumnLayout = zone.id === 'x_axis' || zone.id === 'columns_by' || zone.id === 'overlay_by' || zone.id === 'color_acc_to' || zone.id === 'shape_acc_to';
     const zoneTitle = zone.id === 'left_y_axis' ? 'Y-1 (L)'
       : zone.id === 'right_y_axis' ? 'Y-1 (R)'
-      : zone.id === 'x_axis' ? 'X-1'
       : zone.label;
 
     return (
@@ -583,12 +602,12 @@ export default function ChartDialog({ open }: { open: boolean; onOpenChange: (v:
         }}
         onDrop={e => { setDropIndicator(null); onZoneDrop(e, zone.id); }}
         style={{
-          position: 'absolute', ...pos,
+          position: 'absolute',
           display: 'flex',
-          flexDirection: isXAxis ? 'column' : (vertical ? 'column' : 'row'),
+          flexDirection: isColumnLayout ? 'column' : (vertical ? 'column' : 'row'),
           alignItems: 'center',
           justifyContent: 'center',
-          flexWrap: isXAxis ? 'nowrap' : 'nowrap', gap: 0,
+          flexWrap: isColumnLayout ? 'nowrap' : 'nowrap', gap: 0,
           background: isOver ? C.hotzoneActive : C.hotzone,
           border: `2px dashed ${isOver ? C.hotzoneBorder : '#b0bbd5'}`,
           borderRadius: 6, transition: 'opacity 0.15s',
@@ -596,15 +615,48 @@ export default function ChartDialog({ open }: { open: boolean; onOpenChange: (v:
           zIndex: 10, minHeight: 34, boxSizing: 'border-box',
           overflowX: 'hidden', overflowY: vertical ? 'auto' : 'hidden',
           opacity: visible ? 1 : 0, pointerEvents: visible ? 'auto' : 'none',
+          ...pos,
         }}
       >
-        {tags.length > 0 ? (
+        {zone.id === 'x_axis' && tags.length > 0 ? (
+          /* X axis: vertical list, each field labeled X-1, X-2, ... */
+          <div style={{
+            display: 'flex', flexDirection: 'column', alignItems: 'stretch',
+            gap: 2, width: '100%', overflowY: 'auto',
+          }}>
+            {tags.map((fId, idx) => (
+              <div key={fId} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 11, color: '#1a3a7a', fontWeight: 700, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                  X-{idx + 1}
+                </span>
+                <div
+                  draggable
+                  onDragStart={e => onDragStart(e, fId, { zone: zone.id, index: idx })}
+                  onDragEnd={() => { setDropIndicator(null); onDragEnd(); }}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 4,
+                    background: C.accentLight, color: C.accent, borderRadius: 4,
+                    padding: '2px 6px 2px 8px', fontSize: 11, fontWeight: 500,
+                    cursor: 'grab', whiteSpace: 'nowrap', userSelect: 'none',
+                    border: '1.5px solid transparent',
+                  }}
+                >
+                  {fieldLabel(fId)}
+                  <span
+                    onClick={() => removeTag(zone.id, fId)}
+                    style={{ cursor: 'pointer', fontWeight: 700, fontSize: 13, lineHeight: 1, marginLeft: 2, color: C.accent, opacity: 0.7 }}
+                  >×</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : tags.length > 0 ? (
           <>
             {/* Zone title - bigger, dark blue */}
             <div style={{
               fontSize: 13, color: '#1a3a7a', fontWeight: 700, letterSpacing: 0.3,
-              marginBottom: (vertical || isXAxis) ? 6 : 0,
-              marginRight: (!vertical && !isXAxis) ? 10 : 0,
+              marginBottom: (vertical || isColumnLayout) ? 6 : 0,
+              marginRight: (!vertical && !isColumnLayout) ? 10 : 0,
               whiteSpace: 'nowrap', flexShrink: 0,
             }}>
               {zoneTitle}
@@ -643,7 +695,7 @@ export default function ChartDialog({ open }: { open: boolean; onOpenChange: (v:
         </div>
 
         {/* ── Body ── */}
-        <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+        <div style={{ display: 'flex', flex: 1, minHeight: 0, position: 'relative' }}>
 
           {/* ── Left: Plot Area ── */}
           <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
@@ -674,11 +726,19 @@ export default function ChartDialog({ open }: { open: boolean; onOpenChange: (v:
                 }} />
               )}
 
-              {/* Hot zones: 4px outer margin, 4px gap between zones, Y axes both 120px wide */}
-              {renderHotZone(DROP_ZONES[3], { top: 4, left: 128, right: 128, height: 48 })}
-              {renderHotZone(DROP_ZONES[1], { left: 4, top: 56, bottom: 76, width: 120 })}
-              {renderHotZone(DROP_ZONES[2], { right: 4, top: 56, bottom: 76, width: 120 })}
-              {renderHotZone(DROP_ZONES[0], { bottom: 4, left: 128, right: 128, height: 68 })}
+              {/* Hot zones: all zones use 80px dimension */}
+              {/* columns_by: top bar */}
+              {renderHotZone(DROP_ZONES[3], { top: 4, left: 88, right: 172, height: 80 })}
+              {/* overlay_by: top bar, spans right_y(80) + gap(4) + rows_by(80) = 164px */}
+              {renderHotZone(DROP_ZONES[5], { top: 4, right: 4, width: 164, height: 80 })}
+              {/* left_y_axis */}
+              {renderHotZone(DROP_ZONES[1], { left: 4, top: 88, bottom: 88, width: 80 })}
+              {/* right_y_axis */}
+              {renderHotZone(DROP_ZONES[2], { right: 88, top: 88, bottom: 88, width: 80 })}
+              {/* rows_by: right of right_y_axis */}
+              {renderHotZone(DROP_ZONES[4], { right: 4, top: 88, bottom: 88, width: 80 })}
+              {/* x_axis: bottom, vertical layout with X-1, X-2 labels */}
+              {renderHotZone(DROP_ZONES[0], { bottom: 4, left: 88, right: 172, height: 80 })}
 
               {/* Chart / placeholder */}
               <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '8px' }}>
@@ -695,11 +755,27 @@ export default function ChartDialog({ open }: { open: boolean; onOpenChange: (v:
             </div>
           </div>
 
+          {/* color_acc_to & shape_acc_to: overlay on Color By panel area, same height as overlay_by (80px) */}
+          {renderHotZone(DROP_ZONES[6], { top: 46, right: 200, width: 200, height: 80, zIndex: 20 })}
+          {renderHotZone(DROP_ZONES[7], { top: 130, right: 200, width: 200, height: 80, zIndex: 20 })}
+
+          {/* White overlay on Color By panel when hot zones visible (below header, behind hot zones) */}
+          {(showHotZones || editMode) && (
+            <div style={{
+              position: 'absolute', top: 42, right: 200, width: 200, bottom: 0, zIndex: 15,
+              background: 'rgba(255,255,255,0.88)',
+              backdropFilter: 'blur(2px)',
+              transition: 'opacity 0.2s',
+              pointerEvents: 'none',
+            }} />
+          )}
+
           {/* ── Middle: Color By Panel (200px) ── */}
           <div style={{
             width: 200, flexShrink: 0,
             borderLeft: `1px solid ${C.border}`,
             display: 'flex', flexDirection: 'column', background: C.card,
+            position: 'relative', zIndex: 1,
           }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 12px', borderBottom: `1px solid ${C.border}`, height: 42, boxSizing: 'border-box', flexShrink: 0 }}>
               <span style={{ fontWeight: 600, fontSize: 13, color: C.text }}>Color By</span>
@@ -717,13 +793,33 @@ export default function ChartDialog({ open }: { open: boolean; onOpenChange: (v:
             </div>
             <div style={{ flex: 1, overflowY: 'auto', padding: '8px 10px' }}>
               {(() => {
+                const colors = ['#5470c6','#91cc75','#fac858','#ee6666','#73c0de','#3ba272','#fc8452','#9a60b4','#ea7ccc'];
+                const colorField = zoneFields.color_acc_to.length > 0 ? zoneFields.color_acc_to[0] : null;
+
+                // If color_acc_to is configured, show color categories
+                if (colorField) {
+                  const categories = [...new Set(MOCK_DATA.map(r => String(r[colorField])))];
+                  return (
+                    <>
+                      <div style={{ fontSize: 11, color: C.textSec, fontWeight: 600, marginBottom: 6, padding: '0 4px' }}>
+                        {fieldLabel(colorField)}
+                      </div>
+                      {categories.map((cat, i) => (
+                        <div key={cat} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 4px', fontSize: 12, color: C.text }}>
+                          <div style={{ width: 12, height: 12, borderRadius: 2, background: colors[i % colors.length], flexShrink: 0 }} />
+                          {cat}
+                        </div>
+                      ))}
+                    </>
+                  );
+                }
+
+                // Fallback: show Y axis fields with colors
                 const allSeriesSet = new Set([...zoneFields.left_y_axis, ...zoneFields.right_y_axis]);
-                // Use FIELD_LIST order for stable legend
                 const orderedSeries = FIELD_LIST.filter(f => allSeriesSet.has(f.id)).map(f => f.id);
                 if (orderedSeries.length === 0 && zoneFields.x_axis.length === 0) {
                   return <div style={{ fontSize: 12, color: C.textSec, textAlign: 'center', padding: 20 }}>No fields configured</div>;
                 }
-                const colors = ['#5470c6','#91cc75','#fac858','#ee6666','#73c0de','#3ba272','#fc8452','#9a60b4','#ea7ccc'];
                 return orderedSeries.map((fId, i) => (
                   <div key={fId} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 4px', fontSize: 12, color: C.text }}>
                     <div style={{ width: 12, height: 12, borderRadius: 2, background: colors[i % colors.length], flexShrink: 0 }} />
